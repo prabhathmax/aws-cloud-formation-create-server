@@ -75,7 +75,6 @@ Resources:
       Path: "/"
       Roles:
         - !Ref InstanceRole
-
   LaunchTemplate:
     Type: AWS::EC2::LaunchTemplate
     Properties:
