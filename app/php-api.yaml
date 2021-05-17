@@ -2,10 +2,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: "Deploy Jollycoding environment (excluding persistence layer and networking)"
 Parameters:
-  BaseDomainName:
-    Type: String
-    Default: jollycoding.com
-    Description: "Base domain name (e.g.: test.com)"
   EC2KeyPair:
     Type: AWS::EC2::KeyPair::KeyName
     Description: Key pair to use when creating EC2 instances
