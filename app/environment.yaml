@@ -31,7 +31,6 @@ Parameters:
   # PHP API               #
   #########################
   PhpApi:
-    DependsOn: DnsHostedZone
     Type: AWS::CloudFormation::Stack
     Properties:
       Parameters:
