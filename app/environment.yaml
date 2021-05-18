@@ -38,14 +38,5 @@ Parameters:
         EC2KeyPair: !Ref EC2KeyPair
         EnvironmentName: !Ref EnvironmentName
         EnvironmentType: !Ref EnvironmentType
-        Subnets:
-          Fn::ImportValue:
-            !Sub "jollycoding:networks:${EnvironmentType}:private-subnets"
-        LoadBalancerSubnets:
-          Fn::ImportValue:
-            !Sub "jollycoding:networks:${EnvironmentType}:public-subnets"
         InstanceType: !Ref InstanceType
-        VpcId:
-          Fn::ImportValue:
-            !Sub "jollycoding:networks:${EnvironmentType}:vpc-id"
       TemplateURL: php-api.yaml
