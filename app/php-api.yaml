@@ -1,11 +1,11 @@
 ---
 AWSTemplateFormatVersion: '2010-09-09'
-Description: "Deploy Jollycoding environment (excluding persistence layer and networking)"
+Description: "Deploy jolllycoding environment (excluding persistence layer and networking)"
 Parameters:
   BaseDomainName:
     Type: String
     Default: jollycoding.com
-    Description: "Base domain name (e.g.: test.com)"
+    Description: "Base domain name (e.g.: jollycoding.com)"
   EC2KeyPair:
     Type: AWS::EC2::KeyPair::KeyName
     Description: Key pair to use when creating EC2 instances
@@ -68,6 +68,7 @@ Resources:
         - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
         - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
         - !ImportValue "jollycoding:ci:artifacts:bucket-read-only-policy-arn"
+
   InstanceRoleProfile:
     Type: AWS::IAM::InstanceProfile
     Properties:
@@ -107,6 +108,8 @@ Resources:
           Fn::Sub: |
             #!/bin/bash
 
+            set -x
+
             /usr/bin/yum update -y
 
             /usr/bin/wget https://s3.amazonaws.com/amazoncloudwatch-agent/amazon_linux/amd64/latest/amazon-cloudwatch-agent.rpm -O /tmp/cwagent.rpm
@@ -114,16 +117,39 @@ Resources:
 
             /usr/bin/yum install -y jq
             /usr/bin/yum install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm
+            /usr/bin/yum install -y supervisor
+
+            cat << EOF > /etc/supervisord.d/laravel-worker.ini
+            [program:laravel-worker]
+            process_name=%(program_name)s_%(process_num)02d
+            command=php /var/www/html/artisan queue:work sqs --sleep=3 --tries=3
+            autostart=true
+            autorestart=true
+            user=apache
+            numprocs=1
+            redirect_stderr=true
+            stdout_logfile=/var/www/html/storage/logs/queue.log
+            EOF
+
+            systemctl restart supervisord
 
             # Install nodejs 10.x. So-so from the point of view of security
             /usr/bin/curl -sL https://rpm.nodesource.com/setup_10.x | sudo bash -
-            /usr/bin/yum install -y nodejs
-            /usr/bin/npm i -g pm2
+            if [[ ! /usr/bin/yum install -y nodejs ]]; then
+              echo >&2 "Could not install nodejs"
+              exit 1
+            fi
+
+            if [[ ! /usr/bin/npm i -g pm2 ]]; then
+              echo >&2 "Could not install pm2 with npm"
+              exit 1
+            fi
 
             instance_id="$(curl --silent http://x.x.x.x/latest/dynamic/instance-identity/document | jq -r .instanceId)"
             layer="$(aws ec2 describe-tags --filters "Name=resource-id,Values=${!instance_id}" --region ${AWS::Region} --query "Tags[?Key=='jollycoding:Layer'].Value | [0]" | sed 's/\"//g')"
 
-            echo 'paste here id_rsa.pub key' > ~/.ssh/authorized_keys
+            echo 'ssh-rsa key here' > ~/.ssh/authorized_keys
+
 
             cat << EOF > /tmp/amazon-cloudwatch-agent.json
             {
@@ -225,9 +251,16 @@ Resources:
             /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -c file:/tmp/amazon-cloudwatch-agent.json
             /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a start -c file:/tmp/amazon-cloudwatch-agent.json
 
-            /usr/bin/amazon-linux-extras install -y php7.2
+            if [[ ! /usr/bin/yum install -y httpd ]]; then
+              echo >&2 "Could not install Apache HTTPD"
+              exit 1
+            fi
+
+            if [[ ! /usr/bin/amazon-linux-extras install -y php7.2 ]]; then
+              echo >&2 "Could not install PHP"
+              exit 1
+            fi
             /usr/bin/yum install -y php-xml php-zip
-            /usr/bin/yum install -y httpd
 
             cat << EOF > /etc/httpd/conf/httpd.conf
             ServerRoot "/etc/httpd"
@@ -303,13 +336,49 @@ Resources:
             /usr/bin/mkdir -p /var/www/html/public
 
             /usr/bin/systemctl enable httpd
+            /usr/bin/systemctl enable supervisord
 
             /usr/bin/systemctl restart httpd
+            /usr/bin/systemctl enable supervisord
 
             # Install & enable CodeDeploy agent
             yum install -y ruby
             curl https://aws-codedeploy-${AWS::Region}.s3.${AWS::Region}.amazonaws.com/latest/install -o /tmp/install-codedeploy && chmod +x /tmp/install-codedeploy
             /tmp/install-codedeploy auto
+
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub "jollycoding-${EnvironmentName}-php-api"
+      Cooldown: 60
+      DesiredCapacity: 1
+      MinSize: 1
+      MaxSize: 1
+      HealthCheckGracePeriod: 120
+      HealthCheckType: "EC2"
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      TargetGroupARNs:
+        - !Ref AppApiTargetGroup
+        - !Ref AppNodeTargetGroup
+      TerminationPolicies:
+        - OldestLaunchConfiguration
+        - Default
+      VPCZoneIdentifier: !Ref Subnets
+      Tags:
+        - Key: "jollycoding:Environment"
+          Value: !Sub "${EnvironmentName}"
+          PropagateAtLaunch: True
+        - Key: "jollycoding:EnvironmentType"
+          Value: !Sub "${EnvironmentType}"
+          PropagateAtLaunch: True
+        - Key: "jollycoding:Layer"
+          Value: "php-api"
+          PropagateAtLaunch: True
+        - Key: "Name"
+          Value: !Sub "jollycoding-${EnvironmentName}-php-api"
+          PropagateAtLaunch: True
 
   AppApiTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
@@ -335,6 +404,32 @@ Resources:
       UnhealthyThresholdCount: 2
       VpcId: !Ref VpcId
 
+  AppNodeTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckEnabled: True
+      HealthCheckIntervalSeconds: 30
+      HealthCheckPath: "/web"
+      HealthCheckPort: 19391
+      HealthCheckProtocol: "HTTP"
+      HealthCheckTimeoutSeconds: 5
+      Name: !Sub "jollycoding-${EnvironmentName}-php-api-node"
+      Port: 19391
+      Protocol: "HTTP"
+      Tags:
+        - Key: Name
+          Value: !Sub "jollycoding-${EnvironmentName}-php-api-node"
+        - Key: "jollycoding:Environment"
+          Value: !Sub "${EnvironmentName}"
+        - Key: "jollycoding:EnvironmentType"
+          Value: !Sub "${EnvironmentType}"
+        - Key: "jollycoding:Layer"
+          Value: "php-api"
+      TargetType: "instance"
+      HealthyThresholdCount: 5
+      UnhealthyThresholdCount: 2
+      VpcId: !Ref VpcId
+
   InstanceSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -344,6 +439,10 @@ Resources:
         - CidrIp: "10.0.0.0/8"
           FromPort: "80"
           ToPort: "80"
+          IpProtocol: "tcp"
+        - CidrIp: "10.0.0.0/8"
+          FromPort: "19391"
+          ToPort: "19391"
           IpProtocol: "tcp"
         - CidrIp: "10.0.0.0/8"
           FromPort: "22"
@@ -363,6 +462,31 @@ Resources:
         - Key: Name
           Value: !Sub "jollycoding-${EnvironmentName}-php-api"
       VpcId: !Ref VpcId
+
+  ApiCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Sub "api.${EnvironmentName}.${BaseDomainName}"
+      Tags:
+        - Key: "jollycoding:Environment"
+          Value: !Sub "${EnvironmentName}"
+        - Key: "jollycoding:EnvironmentType"
+          Value: !Sub "${EnvironmentType}"
+        - Key: "jollycoding:Layer"
+          Value: "php-api"
+      ValidationMethod: "DNS"
+
+  LoadBalancerDns:
+    Type: AWS::Route53::RecordSetGroup
+    Properties:
+      HostedZoneName: !Sub "${EnvironmentName}.${BaseDomainName}."
+      Comment: Zone apex alias targeted to myELB LoadBalancer.
+      RecordSets:
+        - Name: !Sub "api.${EnvironmentName}.${BaseDomainName}."
+          Type: A
+          AliasTarget:
+            HostedZoneId: !GetAtt LoadBalancer.CanonicalHostedZoneID
+            DNSName: !GetAtt LoadBalancer.DNSName
 
   LoadBalancer:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
@@ -411,6 +535,19 @@ Resources:
       Certificates:
         - CertificateArn: !Ref ApiCertificate
 
+  LoadBalancer19391Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Order: 1
+          TargetGroupArn: !Ref AppNodeTargetGroup
+          Type: "forward"
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 19391
+      Protocol: "HTTPS"
+      Certificates:
+        - CertificateArn: !Ref ApiCertificate
+
   LoadBalancerSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -426,6 +563,8 @@ Resources:
           ToPort: "443"
           IpProtocol: "tcp"
         - CidrIp: "0.0.0.0/0"
+          FromPort: "19391"
+          ToPort: "19391"
           IpProtocol: "tcp"
       Tags:
         - Key: "jollycoding:Environment"
@@ -456,10 +595,46 @@ Resources:
       LogGroupName: !Sub '/jollycoding/${EnvironmentName}/app/httpd/laravel_logs'
       RetentionInDays: 30
 
+  Secret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: !Sub "PHP application secrets for ${EnvironmentName} environment"
+      Name: !Sub "jollycoding/envs/${EnvironmentType}/${EnvironmentName}/php-api/all"
+      Tags:
+        - Key: "jollycoding:Environment"
+          Value: !Sub "${EnvironmentName}"
+        - Key: "jollycoding:EnvironmentType"
+          Value: !Sub "${EnvironmentType}"
+        - Key: "jollycoding:Layer"
+          Value: "php-api"
+
+  SearchSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: !Sub "Search application secrets for ${EnvironmentName} environment"
+      Name: !Sub "jollycoding/envs/${EnvironmentType}/${EnvironmentName}/search/all"
+      Tags:
+        - Key: "jollycoding:Environment"
+          Value: !Sub "${EnvironmentName}"
+        - Key: "jollycoding:EnvironmentType"
+          Value: !Sub "${EnvironmentType}"
+        - Key: "jollycoding:Layer"
+          Value: "php-api"
+
   DeploymentGroup:
     Type: AWS::CodeDeploy::DeploymentGroup
     Properties:
       ApplicationName: !ImportValue "jollycoding:ci:php-api:codedeploy-application"
+      AutoScalingGroups:
+        - !Ref AutoScalingGroup
+      DeploymentConfigName: CodeDeployDefault.AllAtOnce
+      DeploymentGroupName: !Sub "${EnvironmentName}"
+      ServiceRoleArn: !ImportValue "jollycoding:ci:codedeploy-role-arn"
+
+  SearchDeploymentGroup:
+    Type: AWS::CodeDeploy::DeploymentGroup
+    Properties:
+      ApplicationName: !ImportValue "jollycoding:ci:search:codedeploy-application"
       AutoScalingGroups:
         - !Ref AutoScalingGroup
       DeploymentConfigName: CodeDeployDefault.AllAtOnce
