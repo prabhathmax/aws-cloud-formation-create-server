@@ -31,12 +31,11 @@ Parameters:
   # PHP API               #
   #########################
   PhpApi:
-    Type : AWS::EC2::Instance,
+    Type: AWS::CloudFormation::Stack
     Properties:
       Parameters:
         BaseDomainName: !Ref BaseDomainName
         EC2KeyPair: !Ref EC2KeyPair
         EnvironmentName: !Ref EnvironmentName
         EnvironmentType: !Ref EnvironmentType
-        InstanceType: !Ref InstanceType
       TemplateURL: php-api.yaml
