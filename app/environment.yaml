@@ -1,6 +1,6 @@
 ---
 AWSTemplateFormatVersion: '2010-09-09'
-Description: "Deploy SFRHub environment (excluding persistence layer and networking)"
+Description: "Deploy jollycoding environment (excluding persistence layer and networking)"
 Parameters:
   BaseDomainName:
     Type: String
@@ -42,9 +42,9 @@ Resources:
         IgnorePublicAcls: False
         RestrictPublicBuckets: False
       Tags:
-        - Key: "sfrhub:Environment"
+        - Key: "jollycoding:Environment"
           Value: !Sub "${EnvironmentName}"
-        - Key: "sfrhub:EnvironmentType"
+        - Key: "jollycoding:EnvironmentType"
           Value: !Sub "${EnvironmentType}"
   #########################
   # PHP API               #
@@ -59,12 +59,12 @@ Resources:
         EnvironmentType: !Ref EnvironmentType
         Subnets:
           Fn::ImportValue:
-            !Sub "sfrhub:networks:${EnvironmentType}:private-subnets"
+            !Sub "jollycoding:networks:${EnvironmentType}:private-subnets"
         LoadBalancerSubnets:
           Fn::ImportValue:
-            !Sub "sfrhub:networks:${EnvironmentType}:public-subnets"
+            !Sub "jollycoding:networks:${EnvironmentType}:public-subnets"
         InstanceType: !Ref InstanceType
         VpcId:
           Fn::ImportValue:
-            !Sub "sfrhub:networks:${EnvironmentType}:vpc-id"
+            !Sub "jollycoding:networks:${EnvironmentType}:vpc-id"
       TemplateURL: php-api.yaml
