@@ -31,7 +31,7 @@ Parameters:
   # PHP API               #
   #########################
   PhpApi:
-    Type: AWS::CloudFormation::Stack
+    Type : AWS::EC2::Instance,
     Properties:
       Parameters:
         BaseDomainName: !Ref BaseDomainName
