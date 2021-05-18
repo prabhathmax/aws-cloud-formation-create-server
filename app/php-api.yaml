@@ -340,3 +340,298 @@ Resources:
             yum install -y ruby
             curl https://aws-codedeploy-${AWS::Region}.s3.${AWS::Region}.amazonaws.com/latest/install -o /tmp/install-codedeploy && chmod +x /tmp/install-codedeploy
             /tmp/install-codedeploy auto
+
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub "jollycoding-${EnvironmentName}-php-api"
+      Cooldown: 60
+      DesiredCapacity: 1
+      MinSize: 1
+      MaxSize: 1
+      HealthCheckGracePeriod: 120
+      HealthCheckType: "EC2"
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      TargetGroupARNs:
+        - !Ref AppApiTargetGroup
+        - !Ref AppNodeTargetGroup
+      TerminationPolicies:
+        - OldestLaunchConfiguration
+        - Default
+      VPCZoneIdentifier: !Ref Subnets
+      Tags:
+        - Key: "jollycoding:Environment"
+          Value: !Sub "${EnvironmentName}"
+          PropagateAtLaunch: True
+        - Key: "jollycoding:EnvironmentType"
+          Value: !Sub "${EnvironmentType}"
+          PropagateAtLaunch: True
+        - Key: "jollycoding:Layer"
+          Value: "php-api"
+          PropagateAtLaunch: True
+        - Key: "Name"
+          Value: !Sub "jollycoding-${EnvironmentName}-php-api"
+          PropagateAtLaunch: True
+
+  AppApiTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckEnabled: True
+      HealthCheckIntervalSeconds: 30
+      HealthCheckPath: "/api/uptime"
+      HealthCheckPort: 80
+      HealthCheckProtocol: "HTTP"
+      HealthCheckTimeoutSeconds: 5
+      Name: !Sub "jollycoding-${EnvironmentName}-php-api"
+      Port: 80
+      Protocol: "HTTP"
+      Tags:
+        - Key: Name
+          Value: !Sub "jollycoding-${EnvironmentName}-php-api"
+        - Key: "jollycoding:Environment"
+          Value: !Sub "${EnvironmentName}"
+        - Key: "jollycoding:Layer"
+          Value: "php-api"
+      TargetType: "instance"
+      HealthyThresholdCount: 5
+      UnhealthyThresholdCount: 2
+      VpcId: !Ref VpcId
+
+  AppNodeTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckEnabled: True
+      HealthCheckIntervalSeconds: 30
+      HealthCheckPath: "/web"
+      HealthCheckPort: 19391
+      HealthCheckProtocol: "HTTP"
+      HealthCheckTimeoutSeconds: 5
+      Name: !Sub "jollycoding-${EnvironmentName}-php-api-node"
+      Port: 19391
+      Protocol: "HTTP"
+      Tags:
+        - Key: Name
+          Value: !Sub "jollycoding-${EnvironmentName}-php-api-node"
+        - Key: "jollycoding:Environment"
+          Value: !Sub "${EnvironmentName}"
+        - Key: "jollycoding:EnvironmentType"
+          Value: !Sub "${EnvironmentType}"
+        - Key: "jollycoding:Layer"
+          Value: "php-api"
+      TargetType: "instance"
+      HealthyThresholdCount: 5
+      UnhealthyThresholdCount: 2
+      VpcId: !Ref VpcId
+
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "jollycoding-${EnvironmentName}-php-api"
+      GroupDescription: !Sub "Security group for jollycoding-${EnvironmentName}-php-api instances"
+      SecurityGroupIngress:
+        - CidrIp: "10.0.0.0/8"
+          FromPort: "80"
+          ToPort: "80"
+          IpProtocol: "tcp"
+        - CidrIp: "10.0.0.0/8"
+          FromPort: "19391"
+          ToPort: "19391"
+          IpProtocol: "tcp"
+        - CidrIp: "10.0.0.0/8"
+          FromPort: "22"
+          ToPort: "22"
+          IpProtocol: "tcp"
+        - CidrIp: !ImportValue "jollycoding:networks:shared-services:vpc-vpn-cidr"
+          FromPort: "22"
+          ToPort: "22"
+          IpProtocol: "tcp"
+      Tags:
+        - Key: "jollycoding:Environment"
+          Value: !Sub "${EnvironmentName}"
+        - Key: "jollycoding:EnvironmentType"
+          Value: !Sub "${EnvironmentType}"
+        - Key: "jollycoding:Layer"
+          Value: "php-api"
+        - Key: Name
+          Value: !Sub "jollycoding-${EnvironmentName}-php-api"
+      VpcId: !Ref VpcId
+
+  ApiCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Sub "api.${EnvironmentName}.${BaseDomainName}"
+      Tags:
+        - Key: "jollycoding:Environment"
+          Value: !Sub "${EnvironmentName}"
+        - Key: "jollycoding:EnvironmentType"
+          Value: !Sub "${EnvironmentType}"
+        - Key: "jollycoding:Layer"
+          Value: "php-api"
+      ValidationMethod: "DNS"
+
+  LoadBalancerDns:
+    Type: AWS::Route53::RecordSetGroup
+    Properties:
+      HostedZoneName: !Sub "${EnvironmentName}.${BaseDomainName}."
+      Comment: Zone apex alias targeted to myELB LoadBalancer.
+      RecordSets:
+        - Name: !Sub "api.${EnvironmentName}.${BaseDomainName}."
+          Type: A
+          AliasTarget:
+            HostedZoneId: !GetAtt LoadBalancer.CanonicalHostedZoneID
+            DNSName: !GetAtt LoadBalancer.DNSName
+
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      IpAddressType: "ipv4"
+      Name: !Sub "jollycoding-${EnvironmentName}-php-api"
+      Type: application
+      Scheme: "internet-facing"
+      SecurityGroups:
+        - !Ref LoadBalancerSecurityGroup
+      Subnets: !Ref LoadBalancerSubnets
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: 600
+      Tags:
+        - Key: Name
+          Value: !Sub "jollycoding-${EnvironmentName}-php-api"
+        - Key: "jollycoding:Environment"
+          Value: !Sub "${EnvironmentName}"
+        - Key: "jollycoding:EnvironmentType"
+          Value: !Sub "${EnvironmentType}"
+        - Key: "jollycoding:Layer"
+          Value: "php-api"
+
+  LoadBalancer80Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Order: 1
+          TargetGroupArn: !Ref AppApiTargetGroup
+          Type: "forward"
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: "HTTP"
+
+  LoadBalancer443Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Order: 1
+          TargetGroupArn: !Ref AppApiTargetGroup
+          Type: "forward"
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 443
+      Protocol: "HTTPS"
+      Certificates:
+        - CertificateArn: !Ref ApiCertificate
+
+  LoadBalancer19391Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Order: 1
+          TargetGroupArn: !Ref AppNodeTargetGroup
+          Type: "forward"
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 19391
+      Protocol: "HTTPS"
+      Certificates:
+        - CertificateArn: !Ref ApiCertificate
+
+  LoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "jollycoding-${EnvironmentName}-php-api-lb"
+      GroupDescription: !Sub "Security group for jollycoding-${EnvironmentName}-api load balancer"
+      SecurityGroupIngress:
+        - CidrIp: "0.0.0.0/0"
+          FromPort: "80"
+          ToPort: "80"
+          IpProtocol: "tcp"
+        - CidrIp: "0.0.0.0/0"
+          FromPort: "443"
+          ToPort: "443"
+          IpProtocol: "tcp"
+        - CidrIp: "0.0.0.0/0"
+          FromPort: "19391"
+          ToPort: "19391"
+          IpProtocol: "tcp"
+      Tags:
+        - Key: "jollycoding:Environment"
+          Value: !Sub "${EnvironmentName}"
+        - Key: "jollycoding:EnvironmentType"
+          Value: !Sub "${EnvironmentType}"
+        - Key: "jollycoding:Layer"
+          Value: "php-api"
+        - Key: Name
+          Value: !Sub "jollycoding-${EnvironmentName}-php-api-lb"
+      VpcId: !Ref VpcId
+
+  HttpdAccessLogsGroup:
+    Type: "AWS::Logs::LogGroup"
+    Properties:
+      LogGroupName: !Sub '/jollycoding/${EnvironmentName}/app/httpd/access_logs'
+      RetentionInDays: 30
+
+  HttpdErrorLogsGroup:
+    Type: "AWS::Logs::LogGroup"
+    Properties:
+      LogGroupName: !Sub '/jollycoding/${EnvironmentName}/app/httpd/error_logs'
+      RetentionInDays: 30
+
+  HttpdLaravelLogsGroup:
+    Type: "AWS::Logs::LogGroup"
+    Properties:
+      LogGroupName: !Sub '/jollycoding/${EnvironmentName}/app/httpd/laravel_logs'
+      RetentionInDays: 30
+
+  Secret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: !Sub "PHP application secrets for ${EnvironmentName} environment"
+      Name: !Sub "jollycoding/envs/${EnvironmentType}/${EnvironmentName}/php-api/all"
+      Tags:
+        - Key: "jollycoding:Environment"
+          Value: !Sub "${EnvironmentName}"
+        - Key: "jollycoding:EnvironmentType"
+          Value: !Sub "${EnvironmentType}"
+        - Key: "jollycoding:Layer"
+          Value: "php-api"
+
+  SearchSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: !Sub "Search application secrets for ${EnvironmentName} environment"
+      Name: !Sub "jollycoding/envs/${EnvironmentType}/${EnvironmentName}/search/all"
+      Tags:
+        - Key: "jollycoding:Environment"
+          Value: !Sub "${EnvironmentName}"
+        - Key: "jollycoding:EnvironmentType"
+          Value: !Sub "${EnvironmentType}"
+        - Key: "jollycoding:Layer"
+          Value: "php-api"
+
+  DeploymentGroup:
+    Type: AWS::CodeDeploy::DeploymentGroup
+    Properties:
+      ApplicationName: !ImportValue "jollycoding:ci:php-api:codedeploy-application"
+      AutoScalingGroups:
+        - !Ref AutoScalingGroup
+      DeploymentConfigName: CodeDeployDefault.AllAtOnce
+      DeploymentGroupName: !Sub "${EnvironmentName}"
+      ServiceRoleArn: !ImportValue "jollycoding:ci:codedeploy-role-arn"
+
+  SearchDeploymentGroup:
+    Type: AWS::CodeDeploy::DeploymentGroup
+    Properties:
+      ApplicationName: !ImportValue "jollycoding:ci:search:codedeploy-application"
+      AutoScalingGroups:
+        - !Ref AutoScalingGroup
+      DeploymentConfigName: CodeDeployDefault.AllAtOnce
+      DeploymentGroupName: !Sub "${EnvironmentName}"
+      ServiceRoleArn: !ImportValue "jollycoding:ci:codedeploy-role-arn"
