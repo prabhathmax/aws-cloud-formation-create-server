@@ -32,6 +32,20 @@ Outputs:
     Description: Domain name of the office endpoint
     Value: !Sub "api.${EnvironmentName}.${BaseDomainName}"
 Resources:
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "s3.${EnvironmentName}.${BaseDomainName}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: False
+        BlockPublicPolicy: False
+        IgnorePublicAcls: False
+        RestrictPublicBuckets: False
+      Tags:
+        - Key: "sfrhub:Environment"
+          Value: !Sub "${EnvironmentName}"
+        - Key: "sfrhub:EnvironmentType"
+          Value: !Sub "${EnvironmentType}"
   #########################
   # PHP API               #
   #########################
